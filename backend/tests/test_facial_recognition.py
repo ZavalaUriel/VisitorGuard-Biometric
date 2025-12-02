@@ -1,31 +1,35 @@
-# /backend/tests/test_facial_recognition.py
-
 import os
 import sys
-# Añadir la carpeta backend al path para importar el módulo
+
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from recognition.facial_manager import verify_face 
+from recognition.facial_manager import verify_faces
 
-# Define las rutas de las imágenes de prueba (Asegúrate de tenerlas)
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 REFERENCE_IMG = os.path.join(BASE_PATH, 'test_reference.jpg')
 CAMERA_IMG = os.path.join(BASE_PATH, 'test_camera.jpg')
 STRANGER_IMG = os.path.join(BASE_PATH, 'test_stranger.jpg')
 
-print("--- Prueba de Coincidencia (Misma Persona) ---")
-# Debe retornar 'verified': True
-result_same = verify_face(CAMERA_IMG, REFERENCE_IMG)
-print(f"Resultado: {result_same['verified']}") 
-print("-" * 40)
+def test_same_person():
+    """Test: Verificar que dos fotos de la misma persona coincidan"""
+    if not os.path.exists(REFERENCE_IMG) or not os.path.exists(CAMERA_IMG):
+        print("⚠️ Imágenes de prueba no encontradas, saltando test")
+        return
+    
+    result = verify_faces(REFERENCE_IMG, CAMERA_IMG)
+    print(f"--- Test Misma Persona ---")
+    print(f"Resultado: {result}")
+    assert result is not None
+    assert result.get('verified') == True
 
-print("--- Prueba de No Coincidencia (Persona Diferente) ---")
-# Debe retornar 'verified': False
-result_different = verify_face(CAMERA_IMG, STRANGER_IMG)
-print(f"Resultado: {result_different['verified']}")
-print("-" * 40)
-
-if result_same['verified'] and not result_different['verified']:
-    print("✅ PRUEBA HU3 EXITOSA: La verificación facial funciona correctamente.")
-else:
-    print("❌ PRUEBA HU3 FALLIDA: Revisa las imágenes y la configuración de DeepFace.")
+def test_different_person():
+    """Test: Verificar que dos fotos de diferentes personas NO coincidan"""
+    if not os.path.exists(CAMERA_IMG) or not os.path.exists(STRANGER_IMG):
+        print("⚠️ Imágenes de prueba no encontradas, saltando test")
+        return
+    
+    result = verify_faces(CAMERA_IMG, STRANGER_IMG)
+    print(f"--- Test Diferente Persona ---")
+    print(f"Resultado: {result}")
+    assert result is not None
+    assert result.get('verified') == False

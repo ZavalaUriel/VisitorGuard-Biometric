@@ -1,5 +1,13 @@
 Flask
 Flask-SocketIO
+Flask-CORS
+python-dotenv
 deepface
-opencv-python 
+opencv-python
 SQLAlchemy
+python-engineio
+python-socketio
+requests
+Pillow
+tf-keras
+pytest

@@ -22,5 +22,5 @@ def verify_faces(image_path1, image_path2, model_name='Facenet', distance_metric
         return result
     
     except ValueError as ve:
-        print("ValueError:", ve)
+        print("ValueError:", ve) 
         return None

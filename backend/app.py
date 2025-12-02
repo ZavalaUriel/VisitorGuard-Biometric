@@ -49,6 +49,8 @@ def verify_face_endpoint():
         if 'verification_image' not in request.files:
             return jsonify({'error': 'Missing verification_image'}), 400
         
+        
+
         ref_img = request.files['reference_image']
         ver_img = request.files['verification_image']
         

@@ -727,6 +727,9 @@
                             'Por favor asegúrese de estar bien iluminado y de frente');
                         updateStatus('Esperando rostro - Mejore la iluminación', '#ffd93d');
                     } else if (result.match) {
+                        // Registrar visita en el sistema externo
+                        await registrarVisita(result);
+                        
                         showResult('success', '✅', 'Acceso Autorizado', 
                             `Bienvenido, ${result.nombre}`,
                             `Verificación exitosa`);
@@ -760,6 +763,34 @@
                     }, 3000);
                 }
             }, 'image/jpeg', 0.95);
+        }
+
+        // Registrar visita en el sistema externo
+        async function registrarVisita(visitData) {
+            try {
+                const registroPayload = {
+                    id_persona: visitData.id_persona,
+                    nombre: visitData.nombre || 'Visitante',
+                    fecha: new Date().toISOString(),
+                    verificado: true,
+                };
+
+                const response = await fetch('https://unguessable-garbledly-berry.ngrok-free.dev/api/registros/registrarVisita', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(registroPayload)
+                });
+
+                if (response.ok) {
+                    console.log('✅ Visita registrada exitosamente');
+                } else {
+                    console.warn('⚠️ Error al registrar visita:', response.status);
+                }
+            } catch (error) {
+                console.error('❌ Error conectando con el sistema de registro:', error);
+            }
         }
 
         // Mostrar resultado como notificación

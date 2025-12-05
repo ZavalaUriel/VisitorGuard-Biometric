@@ -1,42 +1,20 @@
 from flask import Flask, request, jsonify, send_file
-from flask_socketio import SocketIO
 from flask_cors import CORS
-from flask_mail import Mail, Message
-from itsdangerous import URLSafeTimedSerializer
-from models.user import User
-from recognition.facial_manager import generate_vector
-
 import os
 from datetime import datetime
 from dotenv import load_dotenv
 
-from services.notification_service import NotificationService
 from services.visit_service import VisitService
-from config.database import init_db, get_db
-from recognition.facial_manager import verify_faces
-from recognition.socket_events import register_socket_events
+from config.database import init_db
+from recognition.facial_manager import verify_faces, generate_vector, compare_embeddings
 
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  
-
-# Configuramos Email (Flask-Mail)
-
-app.config['MAIL_SERVER'] = os.getenv('MAIL_SERVER')
-app.config['MAIL_PORT'] = int(os.getenv('MAIL_PORT', 587))
-app.config['MAIL_USE_TLS'] = os.getenv('MAIL_USE_TLS') == 'True'
-app.config['MAIL_USERNAME'] = os.getenv('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.getenv('MAIL_PASSWORD')
-
-mail = Mail(app)
-serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max para imágenes
 
 CORS(app, resources={r"/api/*": {"origins": "*"}})
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-register_socket_events(socketio)
 
 TEMP_FOLDER = 'temp'
 UPLOADS_FOLDER = 'uploads/visits'
@@ -47,7 +25,23 @@ with app.app_context():
     init_db()
     print("✅ Database initialized")
 
-@app.route('/api/health', methods=['GET'])
+# ==================== ENDPOINTS PRINCIPALES ====================
+
+@app.route('/', methods=['GET'])
+def index():
+    """Ruta raíz - Información de la API"""
+    return jsonify({
+        'service': 'VisitorGuard Biometric API',
+        'version': '1.0.0',
+        'status': 'running',
+        'endpoints': {
+            'health': '/health',
+            'visits': '/api/visits',
+            'face_recognition': '/api/face-recognition/verify'
+        }
+    })
+
+@app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
@@ -56,304 +50,78 @@ def health_check():
         'service': 'VisitorGuard Biometric API'
     })
 
-
-
-
-@app.route('/api/verify-face', methods=['POST'])
-def verify_face_endpoint():
-    """
-    Endpoint para verificar si dos rostros coinciden
-    Espera: reference_image y verification_image como archivos
-    """
-    try:
-        if 'reference_image' not in request.files:
-            return jsonify({'error': 'Missing reference_image'}), 400
-        
-        if 'verification_image' not in request.files:
-            return jsonify({'error': 'Missing verification_image'}), 400
-        
-        
-
-        ref_img = request.files['reference_image']
-        ver_img = request.files['verification_image']
-        
-        if ref_img.filename == '' or ver_img.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        ref_path = os.path.join(TEMP_FOLDER, f"ref_{ref_img.filename}")
-        ver_path = os.path.join(TEMP_FOLDER, f"ver_{ver_img.filename}")
-        
-        ref_img.save(ref_path)
-        ver_img.save(ver_path)
-        
-        result = verify_faces(ref_path, ver_path)
-        
-        try:
-            os.remove(ref_path)
-            os.remove(ver_path)
-        except:
-            pass 
-        
-        if result is None:
-            return jsonify({
-                'error': 'Face verification failed - No face detected or processing error'
-            }), 422
-        
-        return jsonify({
-            'verified': result.get('verified', False),
-            'distance': result.get('distance', 0),
-            'threshold': result.get('threshold', 0),
-            'model': result.get('model', 'Facenet'),
-            'similarity_metric': result.get('distance_metric', 'cosine')
-        })
-        
-    except Exception as e:
-        try:
-            if 'ref_path' in locals():
-                os.remove(ref_path)
-            if 'ver_path' in locals():
-                os.remove(ver_path)
-        except:
-            pass
-        
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/register-face', methods=['POST'])
-def register_face_endpoint():
-    """
-    Endpoint para registrar un nuevo rostro
-    Espera: image (archivo), name, email, role
-    """
-    try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'Missing image file'}), 400
-        
-        image = request.files['image']
-        name = request.form.get('name')
-        email = request.form.get('email')
-        role = request.form.get('role', 'visitor')
-        
-        if not name or not email:
-            return jsonify({'error': 'Missing required fields: name, email'}), 400
-        
-        if image.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        # Guardar temporalmente
-        temp_path = os.path.join(TEMP_FOLDER, image.filename)
-        image.save(temp_path)
-        
-        os.remove(temp_path)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Face registered successfully',
-            'name': name,
-            'email': email,
-            'role': role
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    
-@app.route('/api/pre-register', methods=['POST'])
-def send_verification_email():
-    data = request.json
-    email = data.get('email')
-    name = data.get('name')
-
-    db = next(get_db())
-    existing_user = db.query(User).filter(User.email == email).first()
-
-    if existing_user:   
-        return jsonify({'error': 'Email already registered'}), 400
-    
-    new_user = User(name=name, email=email, role='visitor', verified=False)
-    db.add(new_user)
-    db.commit()
-
-    token = serializer.dumps(email, salt='email-verify')
-
-    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
-    send = NotificationService.send_verification_email(email, name, token, frontend_url)
-    
-
-    if send:
-        return jsonify({'success': True, 'message': 'Verification email sent'})
-    else:
-        return jsonify({'error': 'Failed to send verification email'}), 500
-    
-
-@app.route('/api/complete-registration', methods=['POST'])
-def complete_registration():
-    image = request.files.get('image')
-    token = request.form.get('token')
-
-    if not image or not token:
-        return jsonify({'error': 'Missing image or token'}), 400
-    
-    try: 
-        email = serializer.loads(token, salt='email-verify', max_age=3600)
-    except:
-        return jsonify({'error': 'Invalid or expired token'}), 400  
-        
-
-    temp_path = os.path.join(TEMP_FOLDER, image.filename)
-    image.save(temp_path)
-
-    try:
-        vector = generate_vector(temp_path)
-    
-        db = next(get_db())
-        user = db.query(User).filter(User.email == email).first()
-
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        user.photo_path = f"uploads/{user.id}.jpg"
-        user.face_encoding = vector.tobytes() if vector is not None else None
-        user.verified = True
-
-        db.commit()
-
-        return jsonify({'success': True, 'message': 'Registration completed successfully'})
-    
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-
-
-
-
-
-    try:
-        email = serializer.loads(token, salt='email-verify', max_age=3600)
-    except:
-        return jsonify({'error': 'Invalid or expired token'}), 400
-
-    db = next(get_db())
-    user = db.query(User).filter(User.email == email).first()
-
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-
-    user.verified = True
-    db.commit()
-
-    return jsonify({'success': True, 'message': 'Registration completed successfully'}) 
-
-
-# ==================== ENDPOINTS DE VISITAS ====================
+# ==================== CRUD DE VISITAS ====================
 
 @app.route('/api/visits', methods=['POST'])
 def create_visit():
     """
-    Crear o actualizar una visita con foto
-    Acepta multipart/form-data
-    
-    Campos requeridos:
-    - id_persona: ID de la persona (proporcionado por el cliente)
-    - nombre: Nombre de la persona
-    - foto: Archivo de imagen (.jpg, .jpeg, .png)
+    Crear o actualizar una visita
+    Campos: id_persona (requerido), nombre (requerido), foto (opcional)
     """
     try:
-        # Validar que sea multipart/form-data
-        if not request.content_type or 'multipart/form-data' not in request.content_type:
-            return jsonify({'error': 'Content-Type must be multipart/form-data'}), 400
-        
-        # Obtener datos del formulario
         id_persona = request.form.get('id_persona')
         nombre = request.form.get('nombre')
         
-        # Validar campos requeridos
         if not id_persona or not nombre:
-            return jsonify({'error': 'Missing required fields: id_persona, nombre'}), 400
+            return jsonify({'error': 'id_persona and nombre are required'}), 400
         
-        # Procesar imagen (requerida)
-        if 'foto' not in request.files:
-            return jsonify({'error': 'Missing required field: foto'}), 400
+        foto_path = None
         
-        foto = request.files['foto']
-        if foto.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        # Validar extensión
-        allowed_extensions = {'.jpg', '.jpeg', '.png'}
-        file_ext = os.path.splitext(foto.filename)[1].lower()
-        
-        if file_ext not in allowed_extensions:
-            return jsonify({'error': 'Invalid file type. Only JPG, JPEG, and PNG are allowed'}), 400
-        
-        # Generar nombre único para la imagen
-        filename = f"{id_persona}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
-        foto_path = os.path.join(UPLOADS_FOLDER, filename)
-        
-        # Si ya existe una visita con este id_persona, eliminar foto anterior
-        visit_service = VisitService()
-        existing_visit = visit_service.get_visit_by_id(id_persona)
-        if existing_visit and existing_visit.get('foto_path'):
-            old_foto_path = existing_visit['foto_path']
-            if os.path.exists(old_foto_path):
-                os.remove(old_foto_path)
-        
-        # Guardar nueva imagen
-        foto.save(foto_path)
+        # Procesar foto si existe
+        if 'foto' in request.files:
+            foto = request.files['foto']
+            if foto.filename != '':
+                # Generar nombre único para la foto
+                file_ext = os.path.splitext(foto.filename)[1]
+                filename = f"{id_persona}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
+                foto_path = os.path.join(UPLOADS_FOLDER, filename)
+                foto.save(foto_path)
         
         # Crear/actualizar visita
+        visit_service = VisitService()
         visit_data = {
             'id_persona': id_persona,
             'nombre': nombre,
             'foto_path': foto_path
         }
         
-        result_id = visit_service.create_visit(visit_data)
+        visit_id = visit_service.create_visit(visit_data)
         
         return jsonify({
             'success': True,
             'message': 'Visit created/updated successfully',
-            'id_persona': result_id,
+            'id_persona': visit_id,
             'nombre': nombre,
             'foto_path': foto_path
         }), 201
-        
+    
     except Exception as e:
-        # Limpiar imagen si hubo error
-        if 'foto_path' in locals() and foto_path and os.path.exists(foto_path):
+        # Limpiar foto si hubo error
+        if foto_path and os.path.exists(foto_path):
             os.remove(foto_path)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visits', methods=['GET'])
-def get_visits():
-    """
-    Obtener todas las visitas con paginación
-    Query params: skip (default: 0), limit (default: 100)
-    """
+def get_all_visits():
+    """Obtener todas las visitas"""
     try:
-        skip = int(request.args.get('skip', 0))
-        limit = int(request.args.get('limit', 100))
-        
         visit_service = VisitService()
-        visits = visit_service.get_all_visits(skip=skip, limit=limit)
+        visits = visit_service.get_all_visits()
         
         return jsonify({
             'success': True,
-            'visits': visits,
-            'count': len(visits)
-        })
-        
+            'count': len(visits),
+            'visits': visits
+        }), 200
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visits/<id_persona>', methods=['GET'])
 def get_visit(id_persona):
-    """
-    Obtener una visita por id_persona
-    """
+    """Obtener una visita por ID"""
     try:
         visit_service = VisitService()
         visit = visit_service.get_visit_by_id(id_persona)
@@ -361,58 +129,41 @@ def get_visit(id_persona):
         if not visit:
             return jsonify({'error': 'Visit not found'}), 404
         
-        return jsonify({
-            'success': True,
-            'visit': visit
-        })
-        
+        return jsonify(visit), 200
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visits/<id_persona>', methods=['PUT'])
 def update_visit(id_persona):
-    """
-    Actualizar una visita (nombre y/o foto)
-    Acepta multipart/form-data
-    """
+    """Actualizar una visita existente"""
     try:
         visit_service = VisitService()
         
-        # Verificar que la visita existe
+        # Verificar que existe
         existing_visit = visit_service.get_visit_by_id(id_persona)
         if not existing_visit:
             return jsonify({'error': 'Visit not found'}), 404
         
         update_data = {}
         
-        # Actualizar nombre si viene
+        # Actualizar nombre si se proporciona
         if 'nombre' in request.form:
-            update_data['nombre'] = request.form.get('nombre')
+            update_data['nombre'] = request.form['nombre']
         
-        # Procesar nueva imagen si existe
-        foto_path = None
+        # Actualizar foto si se proporciona
         if 'foto' in request.files:
             foto = request.files['foto']
             if foto.filename != '':
-                # Validar extensión
-                allowed_extensions = {'.jpg', '.jpeg', '.png'}
-                file_ext = os.path.splitext(foto.filename)[1].lower()
+                # Eliminar foto anterior si existe
+                if existing_visit.get('foto_path') and os.path.exists(existing_visit['foto_path']):
+                    os.remove(existing_visit['foto_path'])
                 
-                if file_ext not in allowed_extensions:
-                    return jsonify({'error': 'Invalid file type. Only JPG, JPEG, and PNG are allowed'}), 400
-                
-                # Eliminar foto anterior
-                if existing_visit.get('foto_path'):
-                    old_foto_path = existing_visit['foto_path']
-                    if os.path.exists(old_foto_path):
-                        os.remove(old_foto_path)
-                
-                # Generar nombre único para la nueva imagen
+                # Guardar nueva foto
+                file_ext = os.path.splitext(foto.filename)[1]
                 filename = f"{id_persona}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
                 foto_path = os.path.join(UPLOADS_FOLDER, filename)
-                
-                # Guardar nueva imagen
                 foto.save(foto_path)
                 update_data['foto_path'] = foto_path
         
@@ -421,34 +172,26 @@ def update_visit(id_persona):
         
         success = visit_service.update_visit(id_persona, update_data)
         
-        if not success:
-            # Limpiar imagen si hubo error
-            if foto_path and os.path.exists(foto_path):
-                os.remove(foto_path)
-            return jsonify({'error': 'Could not update visit'}), 500
-        
-        return jsonify({
-            'success': True,
-            'message': 'Visit updated successfully',
-            'foto_path': foto_path
-        })
-        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Visit updated successfully',
+                'id_persona': id_persona
+            }), 200
+        else:
+            return jsonify({'error': 'Update failed'}), 500
+    
     except Exception as e:
-        # Limpiar imagen si hubo error
-        if 'foto_path' in locals() and foto_path and os.path.exists(foto_path):
-            os.remove(foto_path)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visits/<id_persona>', methods=['DELETE'])
 def delete_visit(id_persona):
-    """
-    Eliminar una visita y su foto
-    """
+    """Eliminar una visita"""
     try:
         visit_service = VisitService()
         
-        # Obtener visita para eliminar foto
+        # Obtener la visita antes de eliminar para borrar la foto
         visit = visit_service.get_visit_by_id(id_persona)
         
         if not visit:
@@ -458,27 +201,24 @@ def delete_visit(id_persona):
         if visit.get('foto_path') and os.path.exists(visit['foto_path']):
             os.remove(visit['foto_path'])
         
-        # Eliminar registro de la base de datos
+        # Eliminar de la base de datos
         success = visit_service.delete_visit(id_persona)
         
-        if not success:
-            return jsonify({'error': 'Could not delete visit'}), 500
-        
-        return jsonify({
-            'success': True,
-            'message': 'Visit deleted successfully'
-        })
-        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Visit deleted successfully'
+            }), 200
+        else:
+            return jsonify({'error': 'Delete failed'}), 500
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/visits/<id_persona>/foto', methods=['GET'])
 def get_visit_photo(id_persona):
-    """
-    Obtener la foto de una visita
-    Retorna la imagen directamente
-    """
+    """Descargar la foto de una visita"""
     try:
         visit_service = VisitService()
         visit = visit_service.get_visit_by_id(id_persona)
@@ -492,125 +232,149 @@ def get_visit_photo(id_persona):
             return jsonify({'error': 'Photo not found'}), 404
         
         return send_file(foto_path, mimetype='image/jpeg')
-        
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/visits/search', methods=['GET'])
-def search_visits():
-    """
-    Buscar visitas por nombre
-    Query param: nombre
-    """
+@app.route('/api/visits/search/<nombre>', methods=['GET'])
+def search_visits(nombre):
+    """Buscar visitas por nombre"""
     try:
-        nombre = request.args.get('nombre')
-        
-        if not nombre:
-            return jsonify({'error': 'Missing query parameter: nombre'}), 400
-        
         visit_service = VisitService()
-        visits = visit_service.search_by_nombre(nombre)
+        visits = visit_service.search_by_name(nombre)
         
         return jsonify({
             'success': True,
-            'visits': visits,
-            'count': len(visits)
-        })
-        
+            'count': len(visits),
+            'visits': visits
+        }), 200
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-# ==================== FIN ENDPOINTS DE VISITAS ====================
+# ==================== RECONOCIMIENTO FACIAL ====================
+
+@app.route('/api/face-recognition/verify', methods=['POST'])
+def verify_face_recognition():
     """
-    Crear una nueva visita con imagen opcional
-    Acepta multipart/form-data o application/json
-    
-    Campos requeridos:
-    - motivo_visita, codigo, id_usuario, id_persona, id_tipo_pase, id_area
-    
-    Campos opcionales:
-    - foto (archivo de imagen)
-    - fecha_inicio, fecha_fin, comentario
+    Endpoint para reconocimiento facial OPTIMIZADO
+    Compara embeddings en lugar de imágenes completas
+    Mucho más rápido que la comparación de imágenes
     """
     try:
-        # Determinar si es multipart (con imagen) o JSON
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            # Obtener datos del formulario
-            data = {
-                'motivo_visita': request.form.get('motivo_visita'),
-                'codigo': request.form.get('codigo'),
-                'id_usuario': request.form.get('id_usuario'),
-                'id_persona': request.form.get('id_persona'),
-                'id_tipo_pase': request.form.get('id_tipo_pase'),
-                'id_area': request.form.get('id_area'),
-                'comentario': request.form.get('comentario'),
-                'fecha_inicio': request.form.get('fecha_inicio'),
-                'fecha_fin': request.form.get('fecha_fin'),
-            }
-        else:
-            # JSON tradicional
-            data = request.get_json()
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image provided'}), 400
         
-        # Validar campos requeridos
-        required_fields = ['motivo_visita', 'codigo', 'id_usuario', 'id_persona', 'id_tipo_pase', 'id_area']
-        for field in required_fields:
-            if not data.get(field):
-                return jsonify({'error': f'Missing required field: {field}'}), 400
+        image_file = request.files['image']
         
-        # Procesar imagen si existe
-        foto_path = None
-        if 'foto' in request.files:
-            foto = request.files['foto']
-            if foto.filename != '':
-                # Validar extensión
-                allowed_extensions = {'.jpg', '.jpeg', '.png'}
-                file_ext = os.path.splitext(foto.filename)[1].lower()
+        if image_file.filename == '':
+            return jsonify({'error': 'Empty filename'}), 400
+        
+        # Guardar imagen temporal
+        temp_filename = f"verify_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+        temp_path = os.path.join(TEMP_FOLDER, temp_filename)
+        image_file.save(temp_path)
+        
+        try:
+            # 1. Generar embedding de la imagen capturada
+            print("🔍 Generando embedding de la imagen capturada...")
+            captured_embedding = generate_vector(temp_path)
+            
+            if captured_embedding is None:
+                return jsonify({
+                    'error': 'No face detected in captured image',
+                    'match': False
+                }), 400
+            
+            # 2. Obtener todos los embeddings de la base de datos
+            visit_service = VisitService()
+            all_visits = visit_service.get_all_embeddings()
+            
+            if not all_visits:
+                return jsonify({
+                    'match': False,
+                    'message': 'No embeddings found in database',
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            
+            print(f"🔍 Comparando con {len(all_visits)} embeddings en BD...")
+            
+            best_match = None
+            best_distance = float('inf')
+            threshold = 0.40  # Threshold para Facenet con cosine distance
+            
+            # 3. Comparar embedding capturado con todos los embeddings de BD
+            for visit in all_visits:
+                if not visit.get('embedding'):
+                    continue
                 
-                if file_ext not in allowed_extensions:
-                    return jsonify({'error': 'Invalid file type. Only JPG, JPEG, and PNG are allowed'}), 400
+                try:
+                    # Comparar embeddings directamente
+                    result = compare_embeddings(
+                        captured_embedding.tolist(), 
+                        visit['embedding'],
+                        distance_metric='cosine'
+                    )
+                    
+                    if result and result['verified']:
+                        distance = result['distance']
+                        
+                        print(f"   ✓ Match con {visit['nombre']}: distance={distance:.4f}")
+                        
+                        if distance < best_distance:
+                            best_distance = distance
+                            best_match = visit
                 
-                # Generar nombre único para la imagen
-                codigo = data['codigo']
-                filename = f"{codigo}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
-                foto_path = os.path.join(UPLOADS_FOLDER, filename)
-                
-                # Guardar imagen
-                foto.save(foto_path)
-                data['foto_path'] = foto_path
+                except Exception as e:
+                    print(f"   ✗ Error comparando con {visit.get('nombre', 'unknown')}: {str(e)}")
+                    continue
+            
+            # Limpiar imagen temporal
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            
+            # 4. Retornar resultado
+            if best_match and best_distance < threshold:
+                similarity = 1 - best_distance  # Convertir distancia a similitud
+                return jsonify({
+                    'match': True,
+                    'id_persona': best_match['id_persona'],
+                    'nombre': best_match['nombre'],
+                    'distance': round(best_distance, 4),
+                    'similarity': round(similarity, 4),
+                    'threshold': threshold,
+                    'confidence': 'high' if best_distance < 0.25 else 'medium',
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({
+                    'match': False,
+                    'message': 'No match found in database',
+                    'best_distance': round(best_distance, 4) if best_distance != float('inf') else None,
+                    'threshold': threshold,
+                    'timestamp': datetime.now().isoformat()
+                }), 200
         
-        # Convertir fecha_inicio a datetime si viene como string
-        if 'fecha_inicio' in data and data['fecha_inicio'] and isinstance(data['fecha_inicio'], str):
-            data['fecha_inicio'] = datetime.fromisoformat(data['fecha_inicio'].replace('Z', '+00:00'))
-        else:
-            data['fecha_inicio'] = datetime.now()
-        
-        # Convertir fecha_fin si existe
-        if 'fecha_fin' in data and data['fecha_fin'] and isinstance(data['fecha_fin'], str):
-            data['fecha_fin'] = datetime.fromisoformat(data['fecha_fin'].replace('Z', '+00:00'))
-        
-        visit_service = VisitService()
-        visit_id = visit_service.create_visit(data)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Visit created successfully',
-            'visit_id': visit_id,
-            'foto_path': foto_path
-        }), 201
-        
+        finally:
+            # Asegurar limpieza de archivo temporal
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+    
     except Exception as e:
-        # Limpiar imagen si hubo error
-        if 'foto_path' in locals() and foto_path and os.path.exists(foto_path):
-            os.remove(foto_path)
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Error en reconocimiento facial: {str(e)}")
+        return jsonify({'error': str(e), 'match': False}), 500
 
 
-# ==================== FIN ENDPOINTS DE VISITAS ====================
+# ==================== INICIO DE LA APLICACIÓN ====================
 
 if __name__ == '__main__':
     print("🚀 Starting VisitorGuard Biometric Server...")
     print(f"📂 Temp folder: {os.path.abspath(TEMP_FOLDER)}")
+    print(f"📂 Uploads folder: {os.path.abspath(UPLOADS_FOLDER)}")
     print("🌐 Server running on http://localhost:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

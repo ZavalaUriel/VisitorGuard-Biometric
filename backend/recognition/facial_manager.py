@@ -2,25 +2,53 @@ from deepface import DeepFace
 import numpy as np
 
 def generate_vector(image_path, model_name='Facenet'):
-
-    try :
-
-        embedding = DeepFace.represent(img_path = image_path, model_name = model_name, enforce_detection=True)
+    try:
+        embedding = DeepFace.represent(img_path=image_path, model_name=model_name, enforce_detection=True)
         vector_facial = embedding[0]["embedding"]
-
         return np.array(vector_facial)
-    
     except ValueError as ve:
         print("ValueError:", ve)
         return None
-    
+    except Exception as e:
+        print(f"Error generando vector: {e}")
+        return None
+
 
 def verify_faces(image_path1, image_path2, model_name='Facenet', distance_metric='cosine'):
-
     try:
-        result = DeepFace.verify(img1_path = image_path1, img2_path = image_path2, model_name = model_name, distance_metric=distance_metric, enforce_detection=True)
+        result = DeepFace.verify(img1_path=image_path1, img2_path=image_path2, model_name=model_name, distance_metric=distance_metric, enforce_detection=True)
         return result
-    
     except ValueError as ve:
         print("ValueError:", ve) 
+        return None
+    except Exception as e:
+        print(f"Error verificando rostros: {e}")
+        return None
+
+
+def compare_embeddings(embedding1, embedding2, distance_metric='cosine'):
+    try:
+        vec1 = np.array(embedding1)
+        vec2 = np.array(embedding2)
+        
+        if distance_metric == 'cosine':
+            distance = 1 - np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+            threshold = 0.40
+        elif distance_metric == 'euclidean':
+            distance = np.linalg.norm(vec1 - vec2)
+            threshold = 10.0
+        else:
+            distance = np.linalg.norm(vec1 - vec2)
+            threshold = 10.0
+        
+        verified = distance < threshold
+        
+        return {
+            'distance': float(distance),
+            'threshold': float(threshold),
+            'verified': bool(verified),
+            'distance_metric': distance_metric
+        }
+    except Exception as e:
+        print(f"Error comparando embeddings: {e}")
         return None

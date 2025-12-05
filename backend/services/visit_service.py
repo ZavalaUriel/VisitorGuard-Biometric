@@ -5,10 +5,11 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from config.database import get_collection
 from models.visit import Visit
+from recognition.facial_manager import generate_vector
+import os
 
 
 class VisitService:
-    """Servicio para operaciones CRUD de visitas"""
     
     def __init__(self):
         self.collection = get_collection('visits')
@@ -23,10 +24,22 @@ class VisitService:
         Returns:
             id_persona de la visita creada
         """
+        # Generar embedding si hay foto
+        embedding = None
+        if visit_data.get('foto_path') and os.path.exists(visit_data['foto_path']):
+            try:
+                vector = generate_vector(visit_data['foto_path'])
+                if vector is not None:
+                    embedding = vector.tolist()  # Convertir numpy array a lista
+                    print(f"✅ Embedding generado: {len(embedding)} dimensiones")
+            except Exception as e:
+                print(f"⚠️ Error al generar embedding: {e}")
+        
         visit = Visit(
             id_persona=visit_data['id_persona'],
             nombre=visit_data['nombre'],
-            foto_path=visit_data.get('foto_path')
+            foto_path=visit_data.get('foto_path'),
+            embedding=embedding
         )
         
         # Usar id_persona como _id en MongoDB
@@ -132,3 +145,23 @@ class VisitService:
         for visit in visits:
             visit['id_persona'] = visit.pop('_id')
         return visits
+    
+    def search_by_name(self, nombre: str) -> List[Dict]:
+        """Alias para search_by_nombre"""
+        return self.search_by_nombre(nombre)
+    
+    def get_all_embeddings(self) -> List[Dict]:
+        """
+        Obtiene todos los embeddings de la base de datos
+        
+        Returns:
+            Lista de diccionarios con id_persona, nombre y embedding
+        """
+        visits = list(self.collection.find(
+            {'embedding': {'$exists': True, '$ne': None}},
+            {'_id': 1, 'nombre': 1, 'embedding': 1}
+        ))
+        for visit in visits:
+            visit['id_persona'] = visit.pop('_id')
+        return visits
+

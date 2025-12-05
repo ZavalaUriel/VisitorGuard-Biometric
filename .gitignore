@@ -53,6 +53,11 @@ temp/
 tmp/
 *.tmp
 
+# Archivos de prueba y samples
+test_*.py
+*_sample.json
+landmarks_sample.json
+
 # Modelos de reconocimiento facial
 .deepface/
 *.pkl

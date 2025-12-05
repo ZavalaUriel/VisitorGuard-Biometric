@@ -23,7 +23,6 @@ os.makedirs(UPLOADS_FOLDER, exist_ok=True)
 
 with app.app_context():
     init_db()
-    print("✅ Database initialized")
 
 # ==================== ENDPOINTS PRINCIPALES ====================
 
@@ -254,13 +253,46 @@ def search_visits(nombre):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/visits/<id_persona>/landmarks', methods=['GET'])
+def get_visit_landmarks(id_persona):
+    """
+    Obtener los landmarks faciales de una visita específica
+    Retorna datos biométricos y coordenadas faciales guardadas
+    """
+    try:
+        visit_service = VisitService()
+        visit = visit_service.get_visit_by_id(id_persona)
+        
+        if not visit:
+            return jsonify({'error': 'Visit not found'}), 404
+        
+        if not visit.get('landmarks'):
+            return jsonify({
+                'error': 'No landmarks available for this visit',
+                'message': 'The visit exists but facial landmarks were not extracted'
+            }), 404
+        
+        return jsonify({
+            'success': True,
+            'id_persona': visit['id_persona'],
+            'nombre': visit['nombre'],
+            'landmarks': visit['landmarks'],
+            'biometric_data': visit['landmarks'].get('biometric_data', {}),
+            'facial_area': visit['landmarks'].get('facial_area', {}),
+            'has_embedding': visit.get('embedding') is not None
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ==================== RECONOCIMIENTO FACIAL ====================
 
 @app.route('/api/face-recognition/verify', methods=['POST'])
 def verify_face_recognition():
     """
-    Endpoint para reconocimiento facial OPTIMIZADO
-    Compara embeddings en lugar de imágenes completas
+    Endpoint para reconocimiento facial OPTIMIZADO con análisis de landmarks
+    Compara embeddings y extrae landmarks faciales
     Mucho más rápido que la comparación de imágenes
     """
     try:
@@ -278,17 +310,26 @@ def verify_face_recognition():
         image_file.save(temp_path)
         
         try:
-            # 1. Generar embedding de la imagen capturada
-            print("🔍 Generando embedding de la imagen capturada...")
-            captured_embedding = generate_vector(temp_path)
+            # Generar embedding y landmarks de la imagen capturada
+            from recognition.facial_manager import generate_vector_with_landmarks
             
-            if captured_embedding is None:
+            result_data = generate_vector_with_landmarks(temp_path)
+            
+            if result_data is None:
+                # Limpiar imagen temporal
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    
                 return jsonify({
-                    'error': 'No face detected in captured image',
+                    'error': 'No face detected in image',
+                    'message': 'Please ensure your face is clearly visible and well-lit',
                     'match': False
-                }), 400
+                }), 200  # Cambiar a 200 en lugar de 400 para que el frontend lo maneje mejor
             
-            # 2. Obtener todos los embeddings de la base de datos
+            captured_embedding = result_data['embedding']
+            captured_landmarks = result_data['landmarks']
+            
+            # Obtener todos los embeddings de la base de datos
             visit_service = VisitService()
             all_visits = visit_service.get_all_embeddings()
             
@@ -296,10 +337,9 @@ def verify_face_recognition():
                 return jsonify({
                     'match': False,
                     'message': 'No embeddings found in database',
+                    'captured_landmarks': captured_landmarks,
                     'timestamp': datetime.now().isoformat()
                 }), 200
-            
-            print(f"🔍 Comparando con {len(all_visits)} embeddings en BD...")
             
             best_match = None
             best_distance = float('inf')
@@ -321,24 +361,22 @@ def verify_face_recognition():
                     if result and result['verified']:
                         distance = result['distance']
                         
-                        print(f"   ✓ Match con {visit['nombre']}: distance={distance:.4f}")
-                        
                         if distance < best_distance:
                             best_distance = distance
                             best_match = visit
                 
                 except Exception as e:
-                    print(f"   ✗ Error comparando con {visit.get('nombre', 'unknown')}: {str(e)}")
                     continue
             
             # Limpiar imagen temporal
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             
-            # 4. Retornar resultado
+            # 4. Retornar resultado con landmarks
             if best_match and best_distance < threshold:
                 similarity = 1 - best_distance  # Convertir distancia a similitud
-                return jsonify({
+                
+                response_data = {
                     'match': True,
                     'id_persona': best_match['id_persona'],
                     'nombre': best_match['nombre'],
@@ -346,14 +384,32 @@ def verify_face_recognition():
                     'similarity': round(similarity, 4),
                     'threshold': threshold,
                     'confidence': 'high' if best_distance < 0.25 else 'medium',
-                    'timestamp': datetime.now().isoformat()
-                }), 200
+                    'timestamp': datetime.now().isoformat(),
+                    # Datos faciales capturados
+                    'captured_facial_data': {
+                        'landmarks': captured_landmarks,
+                        'biometric_info': captured_landmarks.get('biometric_data', {})
+                    }
+                }
+                
+                # Incluir landmarks guardados si existen
+                if best_match.get('landmarks'):
+                    response_data['stored_facial_data'] = {
+                        'landmarks': best_match['landmarks'],
+                        'biometric_info': best_match['landmarks'].get('biometric_data', {})
+                    }
+                
+                return jsonify(response_data), 200
             else:
                 return jsonify({
                     'match': False,
                     'message': 'No match found in database',
                     'best_distance': round(best_distance, 4) if best_distance != float('inf') else None,
                     'threshold': threshold,
+                    'captured_facial_data': {
+                        'landmarks': captured_landmarks,
+                        'biometric_info': captured_landmarks.get('biometric_data', {})
+                    },
                     'timestamp': datetime.now().isoformat()
                 }), 200
         
@@ -366,15 +422,10 @@ def verify_face_recognition():
                     pass
     
     except Exception as e:
-        print(f"❌ Error en reconocimiento facial: {str(e)}")
         return jsonify({'error': str(e), 'match': False}), 500
 
 
 # ==================== INICIO DE LA APLICACIÓN ====================
 
 if __name__ == '__main__':
-    print("🚀 Starting VisitorGuard Biometric Server...")
-    print(f"📂 Temp folder: {os.path.abspath(TEMP_FOLDER)}")
-    print(f"📂 Uploads folder: {os.path.abspath(UPLOADS_FOLDER)}")
-    print("🌐 Server running on http://localhost:5000")
     app.run(host='0.0.0.0', port=5000, debug=True)

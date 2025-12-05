@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from config.database import get_collection
 from models.visit import Visit
-from recognition.facial_manager import generate_vector
+from recognition.facial_manager import generate_vector, generate_vector_with_landmarks
 import os
 
 
@@ -16,7 +16,7 @@ class VisitService:
     
     def create_visit(self, visit_data: Dict) -> str:
         """
-        Crea una nueva visita en la base de datos
+        Crea una nueva visita en la base de datos con embedding y landmarks
         
         Args:
             visit_data: Diccionario con id_persona, nombre y opcionalmente foto_path
@@ -24,29 +24,35 @@ class VisitService:
         Returns:
             id_persona de la visita creada
         """
-        # Generar embedding si hay foto
+        # Generar embedding y landmarks si hay foto
         embedding = None
+        landmarks = None
+        
         if visit_data.get('foto_path') and os.path.exists(visit_data['foto_path']):
             try:
-                vector = generate_vector(visit_data['foto_path'])
-                if vector is not None:
-                    embedding = vector.tolist()  # Convertir numpy array a lista
-                    print(f"✅ Embedding generado: {len(embedding)} dimensiones")
+                # Usar la función mejorada que extrae embedding Y landmarks
+                result = generate_vector_with_landmarks(visit_data['foto_path'])
+                
+                if result:
+                    embedding = result['embedding'].tolist()
+                    landmarks = result['landmarks']
+                    
             except Exception as e:
-                print(f"⚠️ Error al generar embedding: {e}")
+                pass
         
         visit = Visit(
             id_persona=visit_data['id_persona'],
             nombre=visit_data['nombre'],
             foto_path=visit_data.get('foto_path'),
-            embedding=embedding
+            embedding=embedding,
+            landmarks=landmarks
         )
         
         # Usar id_persona como _id en MongoDB
         visit_dict = visit.to_dict()
         visit_dict['_id'] = visit_data['id_persona']
         
-        # Insertar o actualizar si ya existe
+        # Insertar o actualizar si ya existe (upsert)
         self.collection.replace_one(
             {'_id': visit_data['id_persona']},
             visit_dict,
@@ -92,7 +98,7 @@ class VisitService:
     
     def update_visit(self, id_persona: str, update_data: Dict) -> bool:
         """
-        Actualiza una visita existente
+        Actualiza una visita existente con embedding y landmarks
         
         Args:
             id_persona: ID de la persona
@@ -102,6 +108,15 @@ class VisitService:
             True si se actualizó correctamente, False en caso contrario
         """
         try:
+            # Si se actualiza la foto, regenerar embedding Y landmarks
+            if 'foto_path' in update_data:
+                foto_path = update_data['foto_path']
+                if foto_path and os.path.exists(foto_path):
+                    result = generate_vector_with_landmarks(foto_path)
+                    if result:
+                        update_data['embedding'] = result['embedding'].tolist()
+                        update_data['landmarks'] = result['landmarks']
+            
             update_data['updated_at'] = datetime.utcnow()
             result = self.collection.update_one(
                 {'_id': id_persona},

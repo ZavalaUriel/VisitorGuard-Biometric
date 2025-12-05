@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 
 class Visit:
     
@@ -8,12 +8,14 @@ class Visit:
         id_persona: str,
         nombre: str,
         foto_path: Optional[str] = None,
-        embedding: Optional[list] = None
+        embedding: Optional[list] = None,
+        landmarks: Optional[Dict] = None
     ):
         self.id_persona = id_persona
         self.nombre = nombre
         self.foto_path = foto_path
         self.embedding = embedding
+        self.landmarks = landmarks
         self.created_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
     
@@ -23,6 +25,7 @@ class Visit:
             "nombre": self.nombre,
             "foto_path": self.foto_path,
             "embedding": self.embedding,
+            "landmarks": self.landmarks,
             "created_at": self.created_at,
             "updated_at": self.updated_at
         }
@@ -33,7 +36,8 @@ class Visit:
             id_persona=data.get("id_persona"),
             nombre=data.get("nombre"),
             foto_path=data.get("foto_path"),
-            embedding=data.get("embedding")
+            embedding=data.get("embedding"),
+            landmarks=data.get("landmarks")
         )
     
     def __repr__(self):

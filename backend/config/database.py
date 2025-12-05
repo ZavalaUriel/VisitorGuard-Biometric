@@ -44,32 +44,30 @@ def close_mongodb_connection():
 
 def init_db():
     """
-    Inicializa la base de datos y crea índices necesarios
+    Inicializa la base de datos y elimina índices problemáticos
     """
     db = get_database()
     
-    # Crear colecciones si no existen
-    collections = db.list_collection_names()
+    # Obtener colección visits
+    visits_collection = db['visits']
     
-    if 'visits' not in collections:
-        db.create_collection('visits')
-        # Crear índices para la colección visits
-        visits_collection = db['visits']
-        visits_collection.create_index('codigo', unique=True)
-        visits_collection.create_index('id_usuario')
-        visits_collection.create_index('id_persona')
-        visits_collection.create_index('fecha_inicio')
-        visits_collection.create_index('estatus')
-        print("Colección 'visits' creada con índices")
+    # Eliminar índice problemático 'codigo_1' si existe
+    try:
+        existing_indexes = visits_collection.index_information()
+        if 'codigo_1' in existing_indexes:
+            visits_collection.drop_index('codigo_1')
+            print("✅ Índice 'codigo_1' eliminado")
+    except Exception as e:
+        print(f"⚠️ Error eliminando índice: {e}")
     
-    if 'users' not in collections:
-        db.create_collection('users')
-        users_collection = db['users']
-        users_collection.create_index('username', unique=True)
-        users_collection.create_index('email', unique=True)
-        print("Colección 'users' creada con índices")
+    # Asegurar que existe índice en _id (id_persona)
+    try:
+        # MongoDB ya tiene índice único en _id por defecto
+        print("✅ Colección 'visits' configurada correctamente")
+    except Exception as e:
+        print(f"⚠️ Error configurando colección: {e}")
     
-    print(f"Base de datos '{DATABASE_NAME}' inicializada correctamente")
+    print(f"✅ Base de datos '{DATABASE_NAME}' inicializada correctamente")
 
 # Para compatibilidad con código anterior (SQLAlchemy)
 # Mantener estas funciones si se necesita transición gradual

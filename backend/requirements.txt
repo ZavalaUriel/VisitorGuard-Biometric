@@ -1,13 +1,15 @@
 Flask
 Flask-SocketIO
 Flask-CORS
+Flask-Mail
 python-dotenv
 deepface
 opencv-python
-SQLAlchemy
 python-engineio
 python-socketio
 requests
 Pillow
 tf-keras
 pytest
+pymongo
+dnspython

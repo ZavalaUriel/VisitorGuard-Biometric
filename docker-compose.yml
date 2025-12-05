@@ -1,0 +1,49 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: visitorguard-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: visitorguard2025
+      MONGO_INITDB_DATABASE: visitorguard
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - visitorguard-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: visitorguard-backend
+    restart: unless-stopped
+    environment:
+      - MONGODB_URL=mongodb://admin:visitorguard2025@mongodb:27017/visitorguard?authSource=admin
+      - FLASK_ENV=development
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+      - ./temp:/app/temp
+      - visit_uploads:/app/uploads/visits
+    depends_on:
+      - mongodb
+    networks:
+      - visitorguard-network
+
+volumes:
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  visit_uploads:
+    driver: local
+
+networks:
+  visitorguard-network:
+    driver: bridge

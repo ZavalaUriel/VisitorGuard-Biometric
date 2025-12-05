@@ -1,31 +1,46 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text
-from sqlalchemy.orm import relationship
 from datetime import datetime
-from config.database import Base
+from typing import Optional
 
-class Visit(Base):
-    __tablename__ = "visits"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+class Visit:
+    """
+    Modelo simplificado de documento MongoDB para Visitas
     
-    purpose = Column(String(255))
-    host_name = Column(String(100))
-    location = Column(String(100))
+    Estructura del documento:
+    - id_persona: ID de la persona (enviado por el cliente, no autogenerado)
+    - nombre: Nombre de la persona visitante
+    - foto_path: Ruta de la foto guardada
+    """
     
-    check_in = Column(DateTime, default=datetime.utcnow)
-    check_out = Column(DateTime, nullable=True)
-    check_out = Column(DateTime, nullable=True)
-    scheduled_time = Column(DateTime, nullable=True)
+    def __init__(
+        self,
+        id_persona: str,
+        nombre: str,
+        foto_path: Optional[str] = None
+    ):
+        self.id_persona = id_persona
+        self.nombre = nombre
+        self.foto_path = foto_path
+        self.created_at = datetime.utcnow()
+        self.updated_at = datetime.utcnow()
     
-    verification_photo = Column(String(255))
-    verification_score = Column(String(10))
-    is_verified = Column(Boolean, default=False)
+    def to_dict(self) -> dict:
+        """Convierte el objeto a diccionario para MongoDB"""
+        return {
+            "id_persona": self.id_persona,
+            "nombre": self.nombre,
+            "foto_path": self.foto_path,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at
+        }
     
-    notes = Column(Text)
-    # Metadatos
-    notes = Column(Text)
+    @staticmethod
+    def from_dict(data: dict) -> 'Visit':
+        """Crea un objeto Visit desde un diccionario de MongoDB"""
+        return Visit(
+            id_persona=data.get("id_persona"),
+            nombre=data.get("nombre"),
+            foto_path=data.get("foto_path")
+        )
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    user = relationship("User", back_populates="visits")_id}, check_in={self.check_in})>"
+    def __repr__(self):
+        return f"<Visit(id_persona={self.id_persona}, nombre={self.nombre})>"

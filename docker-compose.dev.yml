@@ -1,0 +1,29 @@
+# Configuración para desarrollo local
+# Solo levanta MongoDB, el backend se ejecuta fuera de Docker
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: visitorguard-mongodb-dev
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: visitorguard2025
+      MONGO_INITDB_DATABASE: visitorguard
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data_dev:/data/db
+      - mongodb_config_dev:/data/configdb
+    networks:
+      - visitorguard-network
+
+volumes:
+  mongodb_data_dev:
+    driver: local
+  mongodb_config_dev:
+    driver: local
+
+networks:
+  visitorguard-network:
+    driver: bridge

@@ -607,10 +607,157 @@ def search_visits():
         return jsonify({'error': str(e)}), 500
 
 
-# ==================== FIN ENDPOINTS DE VISITAS ====================
+@app.route('/api/visits/<visit_id>', methods=['GET'])
+def get_visit(visit_id):
+    """
+    Obtener una visita por ID
+    """
+    try:
+        visit_service = VisitService()
+        visit = visit_service.get_visit_by_id(visit_id)
+        
+        if not visit:
+            return jsonify({'error': 'Visit not found'}), 404
+        
+        return jsonify({
+            'success': True,
+            'visit': visit
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
+
+
+@app.route('/api/visits/<visit_id>', methods=['PUT'])
+def update_visit(visit_id):
+    """
+    Actualizar una visita con imagen opcional
+    Acepta multipart/form-data o application/json
+    """
+    try:
+        # Determinar si es multipart (con imagen) o JSON
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # Obtener datos del formulario
+            data = {}
+            for key in request.form.keys():
+                data[key] = request.form.get(key)
+        else:
+            # JSON tradicional
+            data = request.get_json()
+        
+        # Procesar nueva imagen si existe
+        foto_path = None
+        if 'foto' in request.files:
+            foto = request.files['foto']
+            if foto.filename != '':
+                # Validar extensión
+                allowed_extensions = {'.jpg', '.jpeg', '.png'}
+                file_ext = os.path.splitext(foto.filename)[1].lower()
+                
+                if file_ext not in allowed_extensions:
+                    return jsonify({'error': 'Invalid file type. Only JPG, JPEG, and PNG are allowed'}), 400
+                
+                # Obtener visita actual para eliminar foto anterior si existe
+                visit_service = VisitService()
+                current_visit = visit_service.get_visit_by_id(visit_id)
+                
+                if current_visit and current_visit.get('foto_path'):
+                    old_foto_path = current_visit['foto_path']
+                    if os.path.exists(old_foto_path):
+                        os.remove(old_foto_path)
+                
+                # Generar nombre único para la nueva imagen
+                codigo = current_visit.get('codigo', visit_id) if current_visit else visit_id
+                filename = f"{codigo}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
+                foto_path = os.path.join(UPLOADS_FOLDER, filename)
+                
+                # Guardar nueva imagen
+                foto.save(foto_path)
+                data['foto_path'] = foto_path
+        
+        # Convertir fechas si vienen como strings
+        if 'fecha_inicio' in data and isinstance(data['fecha_inicio'], str):
+            data['fecha_inicio'] = datetime.fromisoformat(data['fecha_inicio'].replace('Z', '+00:00'))
+        
+        if 'fecha_fin' in data and isinstance(data['fecha_fin'], str):
+            data['fecha_fin'] = datetime.fromisoformat(data['fecha_fin'].replace('Z', '+00:00'))
+        
+        visit_service = VisitService()
+        success = visit_service.update_visit(visit_id, data)
+        
+        if not success:
+            # Limpiar imagen si hubo error
+            if foto_path and os.path.exists(foto_path):
+                os.remove(foto_path)
+            return jsonify({'error': 'Visit not found or not updated'}), 404
+        
+        return jsonify({
+            'success': True,
+            'message': 'Visit updated successfully',
+            'foto_path': foto_path
+        })
+        
+    except Exception as e:
+        # Limpiar imagen si hubo error
+        if 'foto_path' in locals() and foto_path and os.path.exists(foto_path):
+            os.remove(foto_path)
+        return jsonify({'error': str(e)}), 500
+
+
+
+@app.route('/api/visits/<visit_id>', methods=['DELETE'])
+def delete_visit(visit_id):
+    """
+    Eliminar una visita
+    """
+    try:
+        visit_service = VisitService()
+        success = visit_service.delete_visit(visit_id)
+        
+        if not success:
+            return jsonify({'error': 'Visit not found or could not be deleted'}), 404
+        
+        return jsonify({
+            'success': True,
+            'message': 'Visit deleted successfully'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+
+@app.route('/api/visits/<visit_id>/foto', methods=['GET'])
+def get_visit_photo(visit_id):
+    """
+    Obtener la foto de una visita
+    Retorna la imagen directamente
+    """
+    try:
+        visit_service = VisitService()
+        visit = visit_service.get_visit_by_id(visit_id)
+        
+        if not visit:
+            return jsonify({'error': 'Visit not found'}), 404
+        
+        foto_path = visit.get('foto_path')
+        
+        if not foto_path or not os.path.exists(foto_path):
+            return jsonify({'error': 'Photo not found'}), 404
+        
+        return send_file(foto_path, mimetype='image/jpeg')
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+
+# ==================== FIN ENDPOINTS DE VISITAS ====================
     print("🚀 Starting VisitorGuard Biometric Server...")
     print(f"📂 Temp folder: {os.path.abspath(TEMP_FOLDER)}")
     print("🌐 Server running on http://localhost:5000")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True, allow_unsafe_werkzeug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+
+
